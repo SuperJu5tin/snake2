@@ -1,169 +1,190 @@
-#include <stdio.h>
-// #include <conio.h>  // for getch()
-#include <stdlib.h> // for system()
-#include <time.h>   // for time()
-#include <stdbool.h> // for boolean type
+#include <ncurses.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
-#define WIDTH 20
+// Constants for the game size
+#define WIDTH 40
 #define HEIGHT 20
+#define DELAY 100000 // Microseconds
 
-// Directions for the snake's movement
-enum Direction {UP, DOWN, LEFT, RIGHT};
+enum Direction { UP, DOWN, LEFT, RIGHT };
 
-// Snake structure
-typedef struct {
-    int x[100]; // X coordinates of snake body
-    int y[100]; // Y coordinates of snake body
-    int length; // Length of the snake
-    enum Direction dir; // Current direction of the snake
-} Snake;
+typedef struct SnakeSegment {
+    int x, y;
+    struct SnakeSegment *next;
+} SnakeSegment;
 
-// Food structure
-typedef struct {
-    int x; // X coordinate of food
-    int y; // Y coordinate of food
-} Food;
+int score = 0;
 
-// Function prototypes
-void initGame(Snake *snake, Food *food);
-void drawGame(Snake *snake, Food *food);
-void input(Snake *snake);
-void logic(Snake *snake, Food *food, int *score);
-bool collision(Snake *snake);
+// Initialize the game 
+void initGame() {
+    srand(time(0));
+}
 
-int main() {
-    Snake snake;
-    Food food;
-    int score = 0;
-    bool gameOver = false;
+// End the game and clean up
+void endGame() {
+    endwin(); // End ncurses mode
+    printf("Game Over! Thanks for playing. Your score was %d.\n", score);
+}
 
-    initGame(&snake, &food);
+// Generate random food coordinates
+void generateFood(int *foodX, int *foodY) {
+    *foodX = rand() % WIDTH;
+    *foodY = rand() % HEIGHT;
+}
 
-    while (!gameOver) {
-        drawGame(&snake, &food);
-        input(&snake);
-        logic(&snake, &food, &score);
-        gameOver = collision(&snake);
+// Move the snake in the specified direction
+void moveSnake(SnakeSegment *snake, enum Direction dir) {
+    // Move each segment to the position of the one in front of it
+    SnakeSegment *current = snake;
+    int prevX = current->x;
+    int prevY = current->y;
+    int prev2X, prev2Y;
+
+    // Move the head
+    switch (dir) {
+        case UP:
+            current->y--;
+            break;
+        case DOWN:
+            current->y++;
+            break;
+        case LEFT:
+            current->x--;
+            break;
+        case RIGHT:
+            current->x++;
+            break;
     }
 
-    printf("Game Over! Your score is: %d\n", score);
+    current = current->next;
+    while (current != NULL) {
+        prev2X = current->x;
+        prev2Y = current->y;
+        current->x = prevX;
+        current->y = prevY;
+        prevX = prev2X;
+        prevY = prev2Y;
+        current = current->next;
+    }
+}
+
+// Check collisions walls and self
+int checkCollision(SnakeSegment *snake) {
+    // wall
+    if (snake->x < 0 || snake->x >= WIDTH || snake->y < 0 || snake->y >= HEIGHT) {
+        return 1;
+    }
+
+    // self
+    SnakeSegment *current = snake->next;
+    while (current != NULL) {
+        if (snake->x == current->x && snake->y == current->y) {
+            return 1;
+        }
+        current = current->next;
+    }
+
     return 0;
 }
 
-// Initialize the game
-void initGame(Snake *snake, Food *food) {
-    snake->length = 1; // Snake starts with length 1
-    snake->x[0] = WIDTH / 2; // Start in the middle
-    snake->y[0] = HEIGHT / 2; // Start in the middle
-    snake->dir = RIGHT; // Initial direction
-
-    // Place food randomly
-    srand(time(NULL)); // Seed for random number generation
-    food->x = rand() % WIDTH;
-    food->y = rand() % HEIGHT;
-}
-
-// Draw the game state
-void drawGame(Snake *snake, Food *food) {
-    system("cls"); // Clear the console (Windows)
-    for (int i = 0; i < WIDTH + 2; i++)
-        printf("#"); // Draw top wall
-    printf("\n");
-
-    for (int y = 0; y < HEIGHT; y++) {
-        for (int x = 0; x < WIDTH; x++) {
-            if (x == 0)
-                printf("#"); // Draw left wall
-
-            // Draw the snake
-            bool isSnakePart = false;
-            for (int j = 0; j < snake->length; j++) {
-                if (snake->x[j] == x && snake->y[j] == y) {
-                    printf("o"); // Snake part
-                    isSnakePart = true;
-                    break;
-                }
-            }
-
-            // Draw food
-            if (food->x == x && food->y == y) {
-                printf("*"); // Food
-            } else if (!isSnakePart) {
-                printf(" "); // Empty space
-            }
-
-            if (x == WIDTH - 1)
-                printf("#"); // Draw right wall
-        }
-        printf("\n");
+// add seggment
+void growSnake(SnakeSegment *snake) {
+    SnakeSegment *current = snake;
+    while (current->next != NULL) {
+        current = current->next;
     }
 
-    for (int i = 0; i < WIDTH + 2; i++)
-        printf("#"); // Draw bottom wall
-    printf("\n");
+    SnakeSegment *newSegment = (SnakeSegment *)malloc(sizeof(SnakeSegment));
+    newSegment->x = current->x;
+    newSegment->y = current->y;
+    newSegment->next = NULL;
+    current->next = newSegment;
 }
 
-// Handle input
-void input(Snake *snake) {
-    if (_kbhit()) { // Check for keyboard hit
-        switch (getchar()) { // Get the key pressed
-            case 'w':
-                snake->dir = UP;
+// Check if eat food
+int checkFood(SnakeSegment *snake, int foodX, int foodY) {
+    if (snake->x == foodX && snake->y == foodY) {
+        return 1;
+    }
+    return 0;
+}
+
+int main() {
+    int foodX, foodY;
+    int gameOver = 0;
+    enum Direction dir = RIGHT;
+
+    // Initialize ncurses
+    initscr();           // Start ncurses mode
+    noecho();            // Don't echo input
+    curs_set(FALSE);     // Hide cursor
+    timeout(100);        // Non-blocking input
+    keypad(stdscr, TRUE);// Enable arrow keys
+
+    // Initialize game components
+    SnakeSegment *snake = (SnakeSegment *)malloc(sizeof(SnakeSegment));
+    snake->x = WIDTH / 2;
+    snake->y = HEIGHT / 2;
+    snake->next = NULL;
+    
+    generateFood(&foodX, &foodY);
+
+    while (!gameOver) {
+        // clear();  // Clear the screen
+
+        // Handle user input
+        int ch = getch();
+        switch (ch) {
+            case KEY_UP:
+                if (dir != DOWN) dir = UP;
                 break;
-            case 's':
-                snake->dir = DOWN;
+            case KEY_DOWN:
+                if (dir != UP) dir = DOWN;
                 break;
-            case 'a':
-                snake->dir = LEFT;
+            case KEY_LEFT:
+                if (dir != RIGHT) dir = LEFT;
                 break;
-            case 'd':
-                snake->dir = RIGHT;
+            case KEY_RIGHT:
+                if (dir != LEFT) dir = RIGHT;
                 break;
         }
-    }
-}
 
-// Game logic
-void logic(Snake *snake, Food *food, int *score) {
-    // Move the snake
-    int prevX = snake->x[0];
-    int prevY = snake->y[0];
-    int prev2X, prev2Y;
-    snake->x[0] += (snake->dir == RIGHT) - (snake->dir == LEFT);
-    snake->y[0] += (snake->dir == DOWN) - (snake->dir == UP);
+        // Move the snake
+        moveSnake(snake, dir);
 
-    for (int i = 1; i < snake->length; i++) {
-        prev2X = snake->x[i];
-        prev2Y = snake->y[i];
-        snake->x[i] = prevX;
-        snake->y[i] = prevY;
-        prevX = prev2X;
-        prevY = prev2Y;
-    }
-
-    // Check if the snake has eaten the food
-    if (snake->x[0] == food->x && snake->y[0] == food->y) {
-        (*score)++;
-        snake->length++; // Increase length
-        food->x = rand() % WIDTH; // Place new food
-        food->y = rand() % HEIGHT;
-    }
-}
-
-// Check for collisions
-bool collision(Snake *snake) {
-    // Check wall collisions
-    if (snake->x[0] >= WIDTH || snake->x[0] < 0 || 
-        snake->y[0] >= HEIGHT || snake->y[0] < 0) {
-        return true; // Game over due to wall
-    }
-
-    // Check self-collision
-    for (int i = 1; i < snake->length; i++) {
-        if (snake->x[0] == snake->x[i] && snake->y[0] == snake->y[i]) {
-            return true; // Game over due to self-collision
+        // Check for collisions
+        if (checkCollision(snake)) {
+            gameOver = 1;
         }
+
+        // Check if the snake ate the food
+        if (checkFood(snake, foodX, foodY)) {
+            score++;
+            growSnake(snake);
+            generateFood(&foodX, &foodY);
+        }
+        clear();
+
+        // Draw the snake and food
+        SnakeSegment *current = snake;
+        while (current != NULL) {
+            mvprintw(current->y, current->x, "O");
+            current = current->next;
+        }
+        mvprintw(foodY, foodX, "*");
+
+        // Refresh the screen
+        refresh();
+
+        // Delay for game speed
+        usleep(DELAY);
     }
 
-    return false; // No collision
+    // End the game
+    endGame();
+    free(snake); // Free the snake memory
+
+    return 0;
 }
